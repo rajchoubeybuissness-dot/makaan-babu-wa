@@ -13,7 +13,6 @@ let sock = null;
 let qrCodeData = null;
 let isConnected = false;
 
-// Apna n8n webhook URL yahan daalo
 const N8N_WEBHOOK = process.env.N8N_WEBHOOK_URL || 'https://your-n8n.com/webhook/makaan-babu-wa';
 
 async function startWhatsApp() {
@@ -23,9 +22,10 @@ async function startWhatsApp() {
     auth: state,
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
-    connectTimeoutMs: 60000,
-    keepAliveIntervalMs: 10000,
-    emitOwnEvents: false,
+    connectTimeoutMs: 120000,
+    keepAliveIntervalMs: 30000,
+    retryRequestDelayMs: 2000,
+    browser: ['Makaan Babu', 'Chrome', '1.0.0'],
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -33,11 +33,10 @@ async function startWhatsApp() {
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // QR code aaya — save karo
     if (qr) {
       qrCodeData = await QRCode.toDataURL(qr);
       isConnected = false;
-      console.log('QR Code ready — visit /qr to scan');
+      console.log('QR Code ready');
     }
 
     if (connection === 'close') {
@@ -48,18 +47,17 @@ async function startWhatsApp() {
 
       if (shouldReconnect) {
         console.log('Reconnecting...');
-        setTimeout(startWhatsApp, 5000);
+        setTimeout(startWhatsApp, 10000);
       }
     }
 
     if (connection === 'open') {
       isConnected = true;
       qrCodeData = null;
-      console.log('✅ WhatsApp Connected!');
+      console.log('WhatsApp Connected!');
     }
   });
 
-  // Incoming messages
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
 
@@ -73,8 +71,6 @@ async function startWhatsApp() {
       const senderName = msg.pushName || 'User';
 
       if (!text) continue;
-
-      console.log(`📨 ${senderName}: ${text}`);
 
       try {
         await axios.post(N8N_WEBHOOK, {
@@ -90,73 +86,43 @@ async function startWhatsApp() {
   });
 }
 
-// QR Code page — browser mein kholo scan karne ke liye
 app.get('/qr', (req, res) => {
   if (isConnected) {
-    return res.send(`
-      <html><body style="text-align:center;font-family:Arial;padding:50px">
-        <h1 style="color:green">✅ WhatsApp Connected!</h1>
-        <p>Makaan Babu is live! 🚀</p>
-      </body></html>
-    `);
+    return res.send(`<html><body style="text-align:center;font-family:Arial;padding:50px"><h1 style="color:green">WhatsApp Connected!</h1></body></html>`);
   }
   if (!qrCodeData) {
-    return res.send(`
-      <html><body style="text-align:center;font-family:Arial;padding:50px">
-        <h2>⏳ QR Code generate ho raha hai...</h2>
-        <p>10 second mein refresh karo</p>
-        <script>setTimeout(()=>location.reload(), 5000)</script>
-      </body></html>
-    `);
+    return res.send(`<html><body style="text-align:center;font-family:Arial;padding:50px"><h2>Generating QR Code...</h2><p>Refresh in 10 seconds</p><script>setTimeout(()=>location.reload(),5000)</script></body></html>`);
   }
-  res.send(`
-    <html><body style="text-align:center;font-family:Arial;padding:20px">
-      <h2>📱 WhatsApp Scan Karo</h2>
-      <p>WhatsApp → Linked Devices → Link a Device</p>
-      <img src="${qrCodeData}" style="width:300px;height:300px"/>
-      <p style="color:red">⚠️ 60 second mein scan karo!</p>
-      <script>setTimeout(()=>location.reload(), 30000)</script>
-    </body></html>
-  `);
+  res.send(`<html><body style="text-align:center;font-family:Arial;padding:20px"><h2>Scan QR Code</h2><p>WhatsApp > Linked Devices > Link a Device</p><img src="${qrCodeData}" style="width:300px;height:300px"/><p style="color:red">Scan within 60 seconds!</p><script>setTimeout(()=>location.reload(),30000)</script></body></html>`);
 });
 
-// Send message endpoint
 app.post('/send', async (req, res) => {
   try {
     const { chatId, message } = req.body;
-
     if (!isConnected || !sock) {
       return res.status(500).json({ error: 'WhatsApp not connected' });
     }
-
-    // Anti-ban delay
     const delay = Math.floor(Math.random() * 2000) + 2000;
     await new Promise(r => setTimeout(r, delay));
-
-    // Typing indicator
     await sock.sendPresenceUpdate('composing', chatId);
     await new Promise(r => setTimeout(r, 1500));
     await sock.sendPresenceUpdate('paused', chatId);
-
-    // Send
     await sock.sendMessage(chatId, { text: message });
-
     res.json({ success: true });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Health check
 app.get('/', (req, res) => {
   res.json({
-    status: isConnected ? '✅ Connected' : '❌ Disconnected',
+    status: isConnected ? 'Connected' : 'Disconnected',
     service: 'Makaan Babu WhatsApp Server'
   });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
   startWhatsApp();
 });
